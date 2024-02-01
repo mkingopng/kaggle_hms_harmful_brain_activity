@@ -2,12 +2,16 @@
 asdf
 """
 import albumentations as A
+from albumentations.pytorch import ToTensorV2
 import gc
+from glob import glob
 import math
+import multiprocessing
 import numpy as np
 import os
 import pandas as pd
 import random
+from sklearn.model_selection import GroupKFold
 import time
 import timm
 import torch
@@ -15,12 +19,10 @@ import torch.nn as nn
 from torch.optim.lr_scheduler import OneCycleLR
 from torch.utils.data import DataLoader, Dataset
 import torch.nn.functional as F
-from sklearn.model_selection import GroupKFold
-from albumentations.pytorch import ToTensorV2
-from glob import glob
 from tqdm import tqdm
 from typing import Dict, List
 
+# set device to gpu
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 print('Using', torch.cuda.device_count(), 'GPU(s)')
@@ -30,19 +32,26 @@ class CFG:
     AMP = True
     BATCH_SIZE_TRAIN = 32  # fix_me
     BATCH_SIZE_VALID = 32  # fix_me
+    DROP_RATE = 0.1  # fix_me
+    DROP_PATH_RATE = 0.2  # fix_me
     EPOCHS = 4  # fix_me
+    FINAL_DIV_FACTOR = 100
     FOLDS = 5  # fix_me
     FREEZE = False
     GRADIENT_ACCUMULATION_STEPS = 1  # fix_me
-    MAX_GRAD_NORM = 1e7  # fix_me
+    MAX_GRAD_NORM = 1e-7  # fix_me
     MODEL = "tf_efficientnet_b0"  # fix_me
     NUM_FROZEN_LAYERS = 39  # fix_me
-    NUM_WORKERS = 0   # multiprocessing.cpu_count()
+    NUM_WORKERS = multiprocessing.cpu_count()
+    OPTIMIZER_LR = 0.1
+    PCT_START = 0.05
     PRINT_FREQ = 20  # fix_me
     READ_EEG_SPEC_FILES = False
     READ_SPEC_FILES = False
+    SCHEDULER_MAX_LR = 1e-3  # fix_me
     SEED = 20  # fix_me
     TRAIN_FULL_DATA = False
+    VERSION = 1  # fix_me, USE ME TO SAVE MODEL and logs
     VISUALIZE = False
     WEIGHT_DECAY = 0.01  # fix_me
 
@@ -98,7 +107,7 @@ def get_logger(filename=PATHS.OUTPUT_DIR):
     logger.setLevel(INFO)
     handler1 = StreamHandler()
     handler1.setFormatter(Formatter("%(message)s"))
-    handler2 = FileHandler(filename=f"{filename}.log")
+    handler2 = FileHandler(filename=f"{filename} v{CFG.VERSION}.log")
     handler2.setFormatter(Formatter("%(message)s"))
     logger.addHandler(handler1)
     logger.addHandler(handler2)
@@ -193,8 +202,7 @@ else:
 
 # validation
 gkf = GroupKFold(n_splits=CFG.FOLDS)  # fix_me
-for fold, (train_index, valid_index) in enumerate(
-        gkf.split(train_df, train_df.target, train_df.patient_id)):
+for fold, (train_index, valid_index) in enumerate(gkf.split(train_df, train_df.target, train_df.patient_id)):
     train_df.loc[valid_index, "fold"] = int(fold)
 
 print(train_df.groupby('fold').size()), sep()
@@ -253,7 +261,7 @@ class CustomDataset(Dataset):
             img = np.log(img)
 
             # standarize per image
-            ep = 1e-6
+            ep = 1e-6  # FIX_ME
             mu = np.nanmean(img.flatten())
             std = np.nanstd(img.flatten())
             img = (img - mu) / (std + ep)
@@ -269,6 +277,7 @@ class CustomDataset(Dataset):
 
     def __transform(self, img):
         transforms = A.Compose([A.HorizontalFlip(p=0.5)])
+        # todo: add more transforms
         return transforms(image=img)['image']
 
 
@@ -304,8 +313,8 @@ class CustomModel(nn.Module):
         self.model = timm.create_model(
             config.MODEL,
             pretrained=pretrained,
-            drop_rate=0.1,  # fix_me
-            drop_path_rate=0.2,  # fix_me
+            drop_rate=CFG.DROP_RATE,
+            drop_path_rate=CFG.DROP_PATH_RATE,
         )
 
         if config.FREEZE:
@@ -316,7 +325,8 @@ class CustomModel(nn.Module):
         self.custom_layers = nn.Sequential(
             nn.AdaptiveAvgPool2d(1),
             nn.Flatten(),
-            nn.Linear(self.model.num_features, num_classes)
+            nn.Linear(self.model.num_features, num_classes),
+            # TODO: OPTIMISE THIS
         )
 
     def __reshape_input(self, x):
@@ -359,17 +369,17 @@ model = CustomModel(CFG)
 
 optimizer = torch.optim.AdamW(
     model.parameters(),
-    lr=1e-4  # fix_me
+    lr=CFG.OPTIMIZER_LR
 )
 
 scheduler = OneCycleLR(
     optimizer,
-    max_lr=1e-3,  # fix_me
+    max_lr=CFG.SCHEDULER_MAX_LR,
     epochs=CFG.EPOCHS,
     steps_per_epoch=len(train_loader),
-    pct_start=0.05,  # fix_me
+    pct_start=CFG.PCT_START,
     anneal_strategy="cos",
-    final_div_factor=100,  # fix_me
+    final_div_factor=CFG.FINAL_DIV_FACTOR,
 )
 
 for epoch in range(CFG.EPOCHS):
@@ -399,7 +409,7 @@ def train_epoch(train_loader, model, criterion, optimizer, epoch, scheduler, dev
     criterion = nn.KLDivLoss(reduction="batchmean")
     scaler = torch.cuda.amp.GradScaler(enabled=CFG.AMP)
     losses = AverageMeter()
-    start = end = time.time()
+    start = time.time()
     global_step = 0
 
     # iterate over train batches
@@ -466,7 +476,7 @@ def valid_epoch(valid_loader, model, criterion, device):
             preds.append(y_preds.to('cpu').numpy())
             end = time.time()
 
-            # LOG INFO
+            # log info
             if step % CFG.PRINT_FREQ == 0 or step == (
                     len(valid_loader) - 1):
                 print('EVAL: [{0}/{1}] '
@@ -508,7 +518,7 @@ def train_loop(df, fold):
     train_loader = DataLoader(
         train_dataset,
         batch_size=CFG.BATCH_SIZE_TRAIN,
-        shuffle=False,  # fix_me
+        shuffle=True,
         num_workers=CFG.NUM_WORKERS,
         pin_memory=True,
         drop_last=True
@@ -529,16 +539,16 @@ def train_loop(df, fold):
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
-        lr=0.1,  # fix_me
+        lr=CFG.OPTIMIZER_LR,
         weight_decay=CFG.WEIGHT_DECAY
     )
 
     scheduler = OneCycleLR(
         optimizer,
-        max_lr=1e-3,  # fix_me
+        max_lr=CFG.SCHEDULER_MAX_LR,
         epochs=CFG.EPOCHS,
         steps_per_epoch=len(train_loader),
-        pct_start=0.1,  # fix_me
+        pct_start=CFG.PCT_START,
         anneal_strategy="cos",
         final_div_factor=100,
     )
@@ -575,12 +585,11 @@ def train_loop(df, fold):
 
         if avg_val_loss < best_loss:
             best_loss = avg_val_loss
-            LOGGER.info(
-                f'Epoch {epoch + 1} - Save Best Loss: {best_loss:.4f} Model')
+            LOGGER.info(f'Epoch {epoch + 1} - Save Best Loss: {best_loss:.4f} Model')
             torch.save(
                 {'model': model.state_dict(),
                 'predictions': predictions},
-                PATHS.OUTPUT_DIR + f"/{CFG.MODEL.replace('/', '_')}_fold_{fold}_best.pth"
+                PATHS.OUTPUT_DIR + f"/ver_{CFG.VERSION}_{CFG.MODEL.replace('/', '_')}_fold_{fold}_best.pth"
             )
 
     predictions = torch.load(
@@ -606,7 +615,7 @@ def train_loop_full_data(df):
     train_loader = DataLoader(
         train_dataset,
         batch_size=CFG.BATCH_SIZE_TRAIN,
-        shuffle=False,
+        shuffle=True,
         num_workers=CFG.NUM_WORKERS,
         pin_memory=True,
         drop_last=True
@@ -618,18 +627,18 @@ def train_loop_full_data(df):
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
-        lr=0.1,  # fix_me
+        lr=CFG.OPTIMIZER_LR,
         weight_decay=CFG.WEIGHT_DECAY
     )
 
     scheduler = OneCycleLR(
         optimizer,
-        max_lr=1e-3,  # fix_me
+        max_lr=CFG.OPTIMIZER_LR,
         epochs=CFG.EPOCHS,
         steps_per_epoch=len(train_loader),
-        pct_start=0.1,  # fix_me
+        pct_start=CFG.PCT_START,
         anneal_strategy="cos",
-        final_div_factor=100,  # fix_me
+        final_div_factor=CFG.FINAL_DIV_FACTOR,
     )
 
     criterion = nn.KLDivLoss(reduction="batchmean")
@@ -641,7 +650,7 @@ def train_loop_full_data(df):
         LOGGER.info(f'Epoch {epoch+1} - avg_train_loss: {avg_train_loss:.4f} time: {elapsed:.0f}s')
         torch.save(
             {'model': model.state_dict()},
-            PATHS.OUTPUT_DIR + f"/{CFG.MODEL.replace('/', '_')}_epoch_{epoch}.pth")
+            PATHS.OUTPUT_DIR + f"/ver_{CFG.VERSION}_{CFG.MODEL.replace('/', '_')}_epoch_{epoch}.pth")
     torch.cuda.empty_cache()
     gc.collect()
     # return _
