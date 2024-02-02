@@ -46,15 +46,15 @@ class CFG:
     OPTIMIZER_LR = 0.1
     PCT_START = 0.05
     PRINT_FREQ = 20  # fix_me
-    READ_EEG_SPEC_FILES = False
-    READ_SPEC_FILES = False
+    READ_EEG_SPEC_FILES = False  # fix_me: error when this is set to True
+    READ_SPEC_FILES = True
     SCHEDULER_MAX_LR = 1e-3  # fix_me
-    SEED = 20  # fix_me
+    SEED = 42  # fix_me
     TRAIN_FULL_DATA = False
-    VERSION = 1  # fix_me, USE ME TO SAVE MODEL and logs
+    VERSION = 4
     VISUALIZE = False
     WEIGHT_DECAY = 0.01  # fix_me
-
+    # fix_me: this seems deterministic. I get the same CV every time
 
 # configuration
 class PATHS:
@@ -261,7 +261,7 @@ class CustomDataset(Dataset):
             img = np.log(img)
 
             # standarize per image
-            ep = 1e-6  # FIX_ME
+            ep = 1e-6  # fix_me
             mu = np.nanmean(img.flatten())
             std = np.nanstd(img.flatten())
             img = (img - mu) / (std + ep)
