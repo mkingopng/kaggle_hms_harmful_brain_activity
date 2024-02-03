@@ -27,7 +27,7 @@ class CFG:
 
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-print(f"device:{device}")
+print(f"device: {device}")
 
 
 def seed_everything(seed):
@@ -164,7 +164,7 @@ if __name__ == "__main__":
                 loss = KL_loss(train_y1.to(device), train_pred.to(device)).to(device)
                 loss.backward()
                 optimizer.step()
-                print(f"idx:{idx},loss:{loss}")
+                print(f"idx:{idx}, loss: {loss}")
                 train_loss.append(loss.detach().cpu().numpy())
 
             train_loss = np.mean(np.array(train_loss))
