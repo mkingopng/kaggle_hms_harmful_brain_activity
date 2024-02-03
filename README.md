@@ -1,5 +1,30 @@
-# kaggle_hms_harmful_brain_activity
 
+## watch GPU
+```bash
+watch -n 1 nvidia-smi
+```
+
+## improvements
+- logging
+- resent is overfitting
+- wandb experiment tracking
+- standardise the loss function on CD's method
+- tune hyperparameters (learning rate, batch size, etc)
+- explore different models variations
+- explore different models
+- albumentations
+- explore different head/architectures
+- explore different optimizers
+- harmonise functions where possible: seed, KL_div, cv, split,
+- try to get CD's efficient approach to work in Torch
+
+## ensemble
+- efficientnet
+- resnet
+- lgbm or catboost
+- waveform
+
+# kaggle_hms_harmful_brain_activity
 From stethoscopes to tongue depressors, doctors rely on many tools to treat 
 their patients. Physicians use electroencephalography with critically ill 
 patients to detect seizures and other types of brain activity that can cause 
