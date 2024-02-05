@@ -173,3 +173,7 @@ cython_debug/
 /kaggle_kl_div/
 /tf_efficientnet_imagenet_weights/
 /torch_efficientnet_b0_checkpoints/
+/wandb/
+/resnet_models/
+/catboot_models/
+/WaveNet_Model/
