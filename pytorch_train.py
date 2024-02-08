@@ -28,37 +28,40 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 print('Using', torch.cuda.device_count(), 'GPU(s)')
 
 
+# configuration
 class CFG:
-    AMP = True
-    BATCH_SIZE_TRAIN = 32  # fix_me
-    BATCH_SIZE_VALID = 32  # fix_me
-    DROP_RATE = 0.1  # fix_me
-    DROP_PATH_RATE = 0.2  # fix_me
-    EPOCHS = 4  # fix_me
+    BATCH_SIZE_TRAIN = 32
+    BATCH_SIZE_VALID = 32
+    DROP_RATE = 0.1
+    DROP_PATH_RATE = 0.2
+    EPOCHS = 4
     FINAL_DIV_FACTOR = 100
-    FOLDS = 5  # fix_me
+    FOLDS = 5
     FREEZE = False
-    GRADIENT_ACCUMULATION_STEPS = 1  # fix_me
-    MAX_GRAD_NORM = 1e-7  # fix_me
-    MODEL = "tf_efficientnet_b0"  # fix_me
-    NUM_FROZEN_LAYERS = 39  # fix_me
+    GRADIENT_ACCUMULATION_STEPS = 1
+    MAX_GRAD_NORM = 1e-7
+    MODEL = "tf_efficientnet_b0"
+    NUM_FROZEN_LAYERS = 39
     NUM_WORKERS = multiprocessing.cpu_count()
     OPTIMIZER_LR = 0.1
     PCT_START = 0.05
-    PRINT_FREQ = 20  # fix_me
+    PRINT_FREQ = 20
+    SCHEDULER_MAX_LR = 1e-3
+    SEED = 20
+    VERSION = 1
+    WEIGHT_DECAY = 0.01
+
+
+class BOOLS:
+    AMP = True
     READ_EEG_SPEC_FILES = False
-    READ_SPEC_FILES = False
-    SCHEDULER_MAX_LR = 1e-3  # fix_me
-    SEED = 20  # fix_me
-    TRAIN_FULL_DATA = False
-    VERSION = 1  # fix_me, USE ME TO SAVE MODEL and logs
+    READ_SPEC_FILES = False  #
+    TRAIN_FULL_DATA = True  #
     VISUALIZE = False
-    WEIGHT_DECAY = 0.01  # fix_me
 
 
-# configuration
 class PATHS:
-    OUTPUT_DIR = "torch_efficientnet_b0_checkpoints/"
+    OUTPUT_DIR = "resnet34d_1fold/"
     PRE_LOADED_EEGS = 'brain_eeg_spectrograms/eeg_specs.npy'
     PRE_LOADED_SPECTOGRAMS = 'brain_spectrograms/specs.npy'
     TRAIN_CSV = "data/train.csv"
@@ -66,20 +69,40 @@ class PATHS:
     TRAIN_SPECTOGRAMS = "data/train_spectrograms/"
 
 
-# utility function
+# utilities
 class AverageMeter(object):
-    """Computes and stores the average and current value"""
+    """
+    computes and stores the average and current value of metrics over time
+    :param val (float): The current value.
+    :param avg (float): The average of all updates.
+    :param sum (float): The sum of all values updated.
+    :param count (int): The number of updates.
+    """
 
-    def __init__(self):
-        self.reset()
-
-    def reset(self):
+    def __init__(self) -> None:
         self.val = 0
         self.avg = 0
         self.sum = 0
         self.count = 0
+        self.reset()
+
+    def reset(self):
+        """reset all values to 0"""
+        self.val: float = 0
+        self.avg: float = 0
+        self.sum: float = 0
+        self.count: int = 0
 
     def update(self, val, n=1):
+        """
+        update the metrics with a new value.
+
+        :param val (float): The value to add.
+        :param n (int): The weight of update, the batch size
+
+        Returns:
+            float: The updated average.
+        """
         self.val = val
         self.sum += val * n
         self.count += n
@@ -87,21 +110,36 @@ class AverageMeter(object):
 
 
 def as_minutes(s: float):
-    "Convert to minutes."
+    """
+    convert to minutes
+    :param s:
+    :return:
+    """
     m = math.floor(s / 60)
     s -= m * 60
     return '%dm %ds' % (m, s)
 
 
 def time_since(since: float, percent: float):
+    """
+    time delta
+    :param since:
+    :param percent:
+    :return: time delta
+    """
     now = time.time()
     s = now - since
     es = s / percent
     rs = es - s
-    return '%s (remain %s)' % (as_minutes(s), as_minutes(rs))
+    return '%s (remain %s)' % (as_minutes(s), as_minutes(rs))  # return time delta
 
 
 def get_logger(filename=PATHS.OUTPUT_DIR):
+    """
+    logging function
+    :param filename:
+    :return:
+    """
     from logging import getLogger, INFO, StreamHandler, FileHandler, Formatter
     logger = getLogger(__name__)
     logger.setLevel(INFO)
@@ -115,6 +153,11 @@ def get_logger(filename=PATHS.OUTPUT_DIR):
 
 
 def seed_everything(seed: int):
+    """
+    seed everything
+    :param seed:
+    :return:
+    """
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -122,12 +165,27 @@ def seed_everything(seed: int):
 
 
 def sep():
+    """prints a separator line"""
     print("-" * 100)
 
 
-target_preds = [x + "_pred" for x in ['seizure_vote', 'lpd_vote', 'gpd_vote', 'lrda_vote', 'grda_vote', 'other_vote']]
+target_preds = [x + "_pred" for x in [
+    'seizure_vote',
+    'lpd_vote',
+    'gpd_vote',
+    'lrda_vote',
+    'grda_vote',
+    'other_vote'
+]]
 
-label_to_num = {'Seizure': 0, 'LPD': 1, 'GPD': 2, 'LRDA': 3, 'GRDA': 4, 'Other': 5}
+label_to_num = {
+    'Seizure': 0,
+    'LPD': 1,
+    'GPD': 2,
+    'LRDA': 3,
+    'GRDA': 4,
+    'Other': 5
+}
 
 num_to_label = {v: k for k, v in label_to_num.items()}
 LOGGER = get_logger()
@@ -136,7 +194,7 @@ seed_everything(CFG.SEED)
 # load data
 df = pd.read_csv(PATHS.TRAIN_CSV)
 label_cols = df.columns[-6:]
-print(f"Train cataframe shape is: {df.shape}")
+print(f"Train dataframe shape is: {df.shape}")
 print(f"Labels: {list(label_cols)}")
 print(df.head())
 
@@ -149,7 +207,10 @@ train_df = df.groupby('eeg_id')[
 
 train_df.columns = ['spectogram_id', 'min']
 
-aux = df.groupby('eeg_id')[['spectrogram_id', 'spectrogram_label_offset_seconds']].agg({'spectrogram_label_offset_seconds': 'max'})
+aux = df.groupby('eeg_id')[
+    ['spectrogram_id', 'spectrogram_label_offset_seconds']].agg({
+    'spectrogram_label_offset_seconds': 'max'}
+)
 
 train_df['max'] = aux
 
@@ -175,7 +236,7 @@ print(train_df.head())
 paths_spectograms = glob(PATHS.TRAIN_SPECTOGRAMS + "*.parquet")
 print(f'There are {len(paths_spectograms)} spectrogram parquets')
 
-if CFG.READ_SPEC_FILES:
+if BOOLS.READ_SPEC_FILES:
     all_spectrograms = {}
     for file_path in tqdm(paths_spectograms):
         aux = pd.read_parquet(file_path)
@@ -190,7 +251,7 @@ else:
 paths_eegs = glob(PATHS.TRAIN_EEGS + "*.npy")
 print(f'There are {len(paths_eegs)} EEG spectograms')
 
-if CFG.READ_EEG_SPEC_FILES:
+if BOOLS.READ_EEG_SPEC_FILES:
     all_eegs = {}
     for file_path in tqdm(paths_eegs):
         eeg_id = file_path.split("/")[-1].split(".")[0]
@@ -201,7 +262,7 @@ else:
 
 
 # validation
-gkf = GroupKFold(n_splits=CFG.FOLDS)  # fix_me
+gkf = GroupKFold(n_splits=CFG.FOLDS)
 for fold, (train_index, valid_index) in enumerate(gkf.split(train_df, train_df.target, train_df.patient_id)):
     train_df.loc[valid_index, "fold"] = int(fold)
 
@@ -211,6 +272,9 @@ print(train_df.head())
 
 # dataset
 class CustomDataset(Dataset):
+    """
+    Custom dataset
+    """
     def __init__(
             self, df: pd.DataFrame, config,
             augment: bool = False, mode: str = 'train',
@@ -227,13 +291,15 @@ class CustomDataset(Dataset):
 
     def __len__(self):
         """
-        Denotes the number of batches per epoch.
+        denotes the number of batches per epoch.
         """
         return len(self.df)
 
     def __getitem__(self, index):
         """
-        Generate one batch of data.
+        generates one sample of data
+        :param index:
+        :return:
         """
         X, y = self.__data_generation(index)
         if self.augment:
@@ -242,7 +308,9 @@ class CustomDataset(Dataset):
 
     def __data_generation(self, index):
         """
-        Generates data containing batch_size samples.
+        generates data containing batch_size samples
+        :param index:
+        :return:
         """
         X = np.zeros((128, 256, 8), dtype='float32')
         y = np.zeros(6, dtype='float32')
@@ -254,31 +322,36 @@ class CustomDataset(Dataset):
             r = int((row['min'] + row['max']) // 4)
 
         for region in range(4):
-            img = self.spectograms[row.spectogram_id][r:r + 300, region * 100:(region + 1) * 100].T
+            img = self.spectograms[row.spectogram_id][r: r + 300, region * 100:(region + 1) * 100].T
 
             # log transformation on spectogram
             img = np.clip(img, np.exp(-4), np.exp(8))
             img = np.log(img)
 
             # standarize per image
-            ep = 1e-6  # FIX_ME
-            mu = np.nanmean(img.flatten())
-            std = np.nanstd(img.flatten())
-            img = (img - mu) / (std + ep)
-            img = np.nan_to_num(img, nan=0.0)
-            X[14:-14, :, region] = img[:, 22:-22] / 2.0
-            img = self.eeg_spectograms[row.eeg_id]
-            X[:, :, 4:] = img
+            ep = 1e-6  # to avoid division by zero
+            mu = np.nanmean(img.flatten())  # mean
+            std = np.nanstd(img.flatten())  # std dev
+            img = (img - mu) / (std + ep)  # standarize image
+            img = np.nan_to_num(img, nan=0.0)  # set nan to 0
+            X[14:-14, :, region] = img[:, 22:-22] / 2.0  # crop and downsample
+            img = self.eeg_spectograms[row.eeg_id]  #
+            X[:, :, 4:] = img  #
 
             if self.mode != 'test':
-                y = row[label_cols].values.astype(np.float32)
+                y = row[label_cols].values.astype(np.float32)  # get labels
 
-        return X, y
+        return X, y  # return spectogram and labels
 
     def __transform(self, img):
-        transforms = A.Compose([A.HorizontalFlip(p=0.5)])
+        """
+        apply data augmentation
+        :param img:
+        :return:
+        """
+        transforms = A.Compose([A.HorizontalFlip(p=0.5)])  # img horizontal flip
         # todo: add more transforms
-        return transforms(image=img)['image']
+        return transforms(image=img)['image']  # return transformed image
 
 
 # train data set
@@ -298,7 +371,7 @@ train_loader = DataLoader(
     drop_last=True
 )
 
-X, y = train_dataset[0]
+X, y = train_dataset[0]  # get first sample
 
 print(f"X shape: {X.shape}")
 print(f"y shape: {y.shape}")
@@ -307,6 +380,12 @@ print(f"y shape: {y.shape}")
 # model
 class CustomModel(nn.Module):
     def __init__(self, config, num_classes: int = 6, pretrained: bool = True):
+        """
+        custom model using pretrained spine and 4 custom layers
+        :param config:
+        :param num_classes:
+        :param pretrained:
+        """
         super(CustomModel, self).__init__()
         self.USE_KAGGLE_SPECTROGRAMS = True
         self.USE_EEG_SPECTROGRAMS = True
@@ -326,22 +405,24 @@ class CustomModel(nn.Module):
             nn.AdaptiveAvgPool2d(1),
             nn.Flatten(),
             nn.Linear(self.model.num_features, num_classes),
-            # TODO: OPTIMISE THIS
+            # todo: add more custom layers or improve this
         )
 
     def __reshape_input(self, x):
         """
-        Reshapes input (128, 256, 8) -> (512, 512, 3) monotone image.
+        Reshapes input (128, 256, 8) -> (512, 512, 3) monotone image
+        :param x:
+        :return:
         """
-        # Get spectograms
+        # get spectograms
         spectograms = [x[:, :, :, i:i + 1] for i in range(4)]
         spectograms = torch.cat(spectograms, dim=1)
 
-        # Get EEG spectograms
+        # get EEG spectograms
         eegs = [x[:, :, :, i:i + 1] for i in range(4, 8)]
         eegs = torch.cat(eegs, dim=1)
 
-        # Reshape (512, 512, 3)
+        # reshape (512, 512, 3)
         if self.USE_KAGGLE_SPECTROGRAMS & self.USE_EEG_SPECTROGRAMS:
             x = torch.cat([spectograms, eegs], dim=2)
         elif self.USE_EEG_SPECTROGRAMS:
@@ -354,6 +435,11 @@ class CustomModel(nn.Module):
         return x
 
     def forward(self, x):
+        """
+        forward pass
+        :param x:
+        :return:
+        """
         x = self.__reshape_input(x)
         x = self.features(x)
         x = self.custom_layers(x)
@@ -404,10 +490,20 @@ print(f"Output: {output}")
 
 # train and validation functions
 def train_epoch(train_loader, model, criterion, optimizer, epoch, scheduler, device):
-    """One epoch training pass."""
+    """
+    train epoch
+    :param train_loader:
+    :param model:
+    :param criterion:
+    :param optimizer:
+    :param epoch:
+    :param scheduler:
+    :param device:
+    :return:
+    """
     model.train()
     criterion = nn.KLDivLoss(reduction="batchmean")
-    scaler = torch.cuda.amp.GradScaler(enabled=CFG.AMP)
+    scaler = torch.cuda.amp.GradScaler(enabled=BOOLS.AMP)
     losses = AverageMeter()
     start = time.time()
     global_step = 0
@@ -418,7 +514,7 @@ def train_epoch(train_loader, model, criterion, optimizer, epoch, scheduler, dev
             X = X.to(device)
             y = y.to(device)
             batch_size = y.size(0)
-            with torch.cuda.amp.autocast(enabled=CFG.AMP):
+            with torch.cuda.amp.autocast(enabled=BOOLS.AMP):
                 y_preds = model(X)
                 loss = criterion(F.log_softmax(y_preds, dim=1), y)
             if CFG.GRADIENT_ACCUMULATION_STEPS > 1:
@@ -432,7 +528,7 @@ def train_epoch(train_loader, model, criterion, optimizer, epoch, scheduler, dev
                 scaler.update()
                 optimizer.zero_grad()
                 global_step += 1
-                scheduler.step()
+                # scheduler.step()
             end = time.time()
 
             # log info
@@ -449,20 +545,28 @@ def train_epoch(train_loader, model, criterion, optimizer, epoch, scheduler, dev
                               loss=losses,
                               grad_norm=grad_norm,
                               lr=scheduler.get_last_lr()[0]))
-
+    scheduler.step()  # Call scheduler.step() here, after completing all batches for the epoch
     return losses.avg
 
 
 def valid_epoch(valid_loader, model, criterion, device):
-    model.eval()
-    softmax = nn.Softmax(dim=1)
-    losses = AverageMeter()
-    prediction_dict = {}
-    preds = []
+    """
+    validation epoch
+    :param valid_loader:
+    :param model: efficientnet b0
+    :param criterion: KL divergence
+    :param device: gpu if available else cpu
+    :return: return average loss and predictions
+    """
+    model.eval()  # switch to evaluation mode
+    softmax = nn.Softmax(dim=1)  # softmax for predictions
+    losses = AverageMeter()  # average loss
+    prediction_dict = {}  # empty dictionary to store predictions
+    preds = []  # empty list to store predictions
     start = end = time.time()
     with tqdm(valid_loader, unit="valid_batch",
-              desc='Validation') as tqdm_valid_loader:
-        for step, (X, y) in enumerate(tqdm_valid_loader):
+              desc='Validation') as tqdm_valid_loader:  #
+        for step, (X, y) in enumerate(tqdm_valid_loader):  # iterate over valid batches
             X = X.to(device)
             y = y.to(device)
             batch_size = y.size(0)
@@ -488,16 +592,22 @@ def valid_epoch(valid_loader, model, criterion, device):
                               loss=losses))
 
     prediction_dict["predictions"] = np.concatenate(preds)
-    return losses.avg, prediction_dict
+    return losses.avg, prediction_dict  # return average loss and predictions
 
 
 # train loop
 def train_loop(df, fold):
+    """
+    train loop
+    :param df:
+    :param fold:
+    :return:
+    """
     LOGGER.info(f"========== Fold: {fold} training ==========")
 
     # split
-    train_folds = df[df['fold'] != fold].reset_index(drop=True)
-    valid_folds = df[df['fold'] == fold].reset_index(drop=True)
+    train_folds = df[df['fold'] != fold].reset_index(drop=True)  # train folds
+    valid_folds = df[df['fold'] == fold].reset_index(drop=True)  # validation folds
 
     # datasets
     train_dataset = CustomDataset(
@@ -593,7 +703,7 @@ def train_loop(df, fold):
             )
 
     predictions = torch.load(
-        PATHS.OUTPUT_DIR + f"{CFG.MODEL.replace('/', '_')}_fold_{fold}_best.pth",
+        PATHS.OUTPUT_DIR + f"ver_{CFG.VERSION}_{CFG.MODEL.replace('/', '_')}_fold_{fold}_best.pth",
         map_location=torch.device('cpu'))['predictions']
     valid_folds[target_preds] = predictions
 
@@ -605,6 +715,11 @@ def train_loop(df, fold):
 
 # train full data
 def train_loop_full_data(df):
+    """
+    train loop full data
+    :param df:
+    :return:
+    """
     train_dataset = CustomDataset(
         df,
         CFG,
@@ -658,16 +773,21 @@ def train_loop_full_data(df):
 
 # get result
 def get_result(oof_df):
-    kl_loss = nn.KLDivLoss(reduction="batchmean")
-    labels = torch.tensor(oof_df[label_cols].values)
-    preds = torch.tensor(oof_df[target_preds].values)
-    preds = F.log_softmax(preds, dim=1)
-    result = kl_loss(preds, labels)
-    return result
+    """
+
+    :param oof_df:
+    :return:
+    """
+    kl_loss = nn.KLDivLoss(reduction="batchmean")  # KL divergence loss
+    labels = torch.tensor(oof_df[label_cols].values)  # covert label_cols to tensor
+    preds = torch.tensor(oof_df[target_preds].values)  # convert target preds to tensor
+    preds = F.log_softmax(preds, dim=1)  # apply log softmax to predictions
+    result = kl_loss(preds, labels)  #
+    return result   #
 
 
 if __name__ == "__main__":
-    if not CFG.TRAIN_FULL_DATA:  # ie if False, train 5 folds and 5 epochs, show CV
+    if not BOOLS.TRAIN_FULL_DATA:
         oof_df = pd.DataFrame()
         for fold in range(CFG.FOLDS):
             if fold in [0, 1, 2, 3, 4]:
@@ -678,5 +798,5 @@ if __name__ == "__main__":
         oof_df = oof_df.reset_index(drop=True)
         LOGGER.info(f"========== CV: {get_result(oof_df)} ==========")
         oof_df.to_csv(PATHS.OUTPUT_DIR + '/oof_df.csv', index=False)
-    else:  # ie if True
-        train_loop_full_data(train_df)  # one fold & 5 epoch, no CV
+    else:
+        train_loop_full_data(train_df)
