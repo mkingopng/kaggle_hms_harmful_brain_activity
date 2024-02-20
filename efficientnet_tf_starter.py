@@ -40,7 +40,7 @@ class CFG:
 	EPOCHS = 4
 	EPOCHS2 = 10
 	VER = 5
-	LOAD_MODELS_FROM = 'brain_efficientnet_models_v3_v4_v5/'
+	LOAD_MODELS_FROM = 'brain_efficientnet_models_v3_v4_v5/'  # load pretrained models
 	USE_KAGGLE_SPECTROGRAMS = True
 	USE_EEG_SPECTROGRAMS = True
 	MIX = True  # use mixed precision
@@ -354,7 +354,7 @@ def build_model():
 	# compile model
 	model = tf.keras.Model(inputs=inp, outputs=x)
 	opt = tf.keras.optimizers.Adam(learning_rate=1e-3)
-	loss = tf.keras.losses.KLDivergence()
+	loss = tf.keras.losses.KLDivergence()  # KL divergence
 
 	model.compile(loss=loss, optimizer=opt)
 	return model
@@ -409,7 +409,7 @@ def spectrogram_from_eeg(parquet_path, display=False):
 	if display: plt.figure(figsize=(10, 7))
 	signals = []
 	for k in range(4):
-		COLS = FEATS[k]
+		COLS = CFG.FEATS[k]
 
 		for kk in range(4):
 
@@ -424,8 +424,8 @@ def spectrogram_from_eeg(parquet_path, display=False):
 				x[:] = 0
 
 			# denoise
-			if USE_WAVELET:
-				x = denoise(x, wavelet=USE_WAVELET)
+			if CFG.USE_WAVELET:
+				x = denoise(x, wavelet=CFG.USE_WAVELET)
 			signals.append(x)
 
 			# raw spectrogram
@@ -480,19 +480,26 @@ if __name__ == "__main__":
 	all_oof = []
 	all_true = []
 
+	# initialize W&B run for each fold
+	wandb.init(
+		project="harmful_brain_activity",
+		entity="michael_kingston",
+		tags=["EfficientNet", "Kaggle", f"fold_{i}"],
+		reinit=True
+	)
+
+	# update or add any additional hyperparameters
+	wandb.config.update({
+		"epochs": CFG.EPOCHS,
+		"learning_rate": LR,
+		"batch_size": 32
+	})
+
+	# cross validation
 	gkf = GroupKFold(n_splits=5)
+
 	for i, (train_index, valid_index) in enumerate(
 			gkf.split(train, train.target, train.patient_id)):
-		# Initialize W&B run for each fold
-		wandb.init(
-			project="harmful_brain_activity",
-			entity="michael_kingston",
-			tags=["EfficientNet", "Kaggle", f"fold_{i}"],
-			reinit=True
-		)
-		# Update or add any additional hyperparameters
-		wandb.config.update(
-			{"epochs": CFG.EPOCHS, "learning_rate": LR, "batch_size": 32})
 
 		print('#' * 25)
 		print(f'### Fold {i + 1}')
@@ -536,7 +543,6 @@ if __name__ == "__main__":
 
 		del model, oof
 		gc.collect()
-		wandb.finish()  # Finish the W&B run for this fold
 
 	all_oof = np.concatenate(all_oof)
 	all_true = np.concatenate(all_true)
@@ -561,10 +567,11 @@ if __name__ == "__main__":
 	test.head()
 
 	# read all spectrograms
-	PATH2 = 'data/test_spectrograms/'
-	files2 = os.listdir(PATH2)
-	print(f'There are {len(files2)} test spectrogram parquets')
+	PATH2 = 'data/test_spectrograms/'  # path to test spectrograms
+	files2 = os.listdir(PATH2)  #
+	print(f'There are {len(files2)} test spectrogram parquets')  #
 
+	#
 	spectrograms2 = {}
 	for i, f in enumerate(files2):
 		if i % 100 == 0:
@@ -585,6 +592,7 @@ if __name__ == "__main__":
 	print('Converting Test EEG to Spectrograms...')
 	print()
 
+	#
 	for i, eeg_id in enumerate(EEG_IDS2):
 		# create spectrogram from eeg parquet
 		img = spectrogram_from_eeg(f'{PATH2}{eeg_id}.parquet', i < DISPLAY)
@@ -622,5 +630,7 @@ if __name__ == "__main__":
 	print('Submissionn shape', sub.shape)
 	sub.head()
 
-	# sanity check to confirm predictions sum to one
+	wandb.finish()  # finish the W&B run for this fold
+
+	# sanity-check to confirm predictions sum to one
 	sub.iloc[:, -6:].sum(axis=1)
